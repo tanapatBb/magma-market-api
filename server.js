@@ -81,3 +81,15 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
 });
+
+// 📌 API สำหรับดึงรายการสินค้าทั้งหมด
+app.get('/api/products', async (req, res) => {
+  try {
+    // โค้ดดึงข้อมูลสินค้าเดิมของคุณ (เช่น ดึงจาก Google Sheets หรือ Database)
+    // ตัวอย่างการส่งข้อมูลกลับ:
+    res.json(productsData || []);
+  } catch (error) {
+    console.error('Error fetching products:', error);
+    res.status(500).json({ status: 'error', message: 'ไม่สามารถดึงข้อมูลสินค้าได้' });
+  }
+});
