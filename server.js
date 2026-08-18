@@ -103,3 +103,56 @@ app.post('/api/products', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));
+
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+// API รับรูปถ่ายซองอาหาร แล้วส่งให้ Gemini AI อ่านข้อมูล
+app.post('/api/scan-bag', async (req, res) => {
+  try {
+    const { imageBase64 } = req.body;
+
+    if (!imageBase64) {
+      return res.status(400).json({ status: 'error', message: 'กรุณาส่งรูปภาพ' });
+    }
+
+    const model = genAI.getGenerativeModel({ 
+      model: "gemini-1.5-flash",
+      generationConfig: { responseMimeType: "application/json" }
+    });
+
+    const prompt = `
+      โปรดวิเคราะห์รูปภาพซองอาหารสัตว์นี้ แล้วดึงข้อมูลออกมาในรูปแบบ JSON ภาษาไทย/อังกฤษ ดังนี้:
+      1. "brand": ชื่อแบรนด์ หรือ ยี่ห้อสินค้าหลักบนซอง (เช่น SmartHeart, Royal Canin, Pedigree, Whiskas, Me-O)
+      2. "volumeValue": ตัวเลขระบุขนาดหรือน้ำหนักบรรจุ เช่น 500, 1.2, 3, 10 (ตอบเฉพาะตัวเลข)
+      3. "volumeUnit": หน่วยของขนาด เลือกระหว่าง "g", "kg", "ml", "L", "ชิ้น" (ถ้าไม่แน่ใจให้ใช้ "kg")
+
+      ตัวอย่างโครงสร้างผลลัพธ์:
+      {
+        "brand": "SmartHeart",
+        "volumeValue": 1.2,
+        "volumeUnit": "kg"
+      }
+    `;
+
+    const imagePart = {
+      inlineData: {
+        data: imageBase64.split(',')[1],
+        mimeType: 'image/jpeg'
+      }
+    };
+
+    const result = await model.generateContent([prompt, imagePart]);
+    const responseText = result.response.text();
+    const extractedData = JSON.parse(responseText);
+
+    res.json({
+      status: 'success',
+      data: extractedData
+    });
+
+  } catch (error) {
+    console.error('Gemini Scan Error:', error);
+    res.status(500).json({ status: 'error', message: 'ไม่สามารถประมวลผลรูปภาพได้' });
+  }
+});
