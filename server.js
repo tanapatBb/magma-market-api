@@ -74,3 +74,10 @@ app.post('/api/scan-bag', async (req, res) => {
     res.status(500).json({ status: 'error', message: 'ไม่สามารถประมวลผลรูปภาพได้: ' + error.message });
   }
 });
+
+// 📌 กำหนด PORT ให้รองรับทั้งบน Render และ Local
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`🚀 Server is running on port ${PORT}`);
+});
