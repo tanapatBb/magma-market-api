@@ -1,117 +1,35 @@
-const express = require('express');
-const mongoose = require('mongoose');
-const cors = require('cors');
+// 📌 นำเข้า dotenv ไว้บรรทัดแรกสุด
 require('dotenv').config();
+
+const express = require('express');
+const cors = require('cors');
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' })); // ปรับรับไฟล์ Base64 รูปภาพขนาดใหญ่ได้
 
-// 🔗 ลิงก์เชื่อมต่อ MongoDB Atlas (อย่าลืมใส่รหัสผ่านจริงของคุณแทน <db_password>)
-const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://tanapatledbb_db_user:WkHy66Js3KJaxyBR@cluster0.u8ymxsf.mongodb.net/?appName=Cluster0";
-
-mongoose.connect(MONGO_URI)
-  .then(() => console.log('🟢 MongoDB Connected Successfully!'))
-  .catch(err => console.error('🔴 MongoDB Connection Error:', err));
-
-// 📦 Schema โครงสร้างสินค้า
-const productSchema = new mongoose.Schema({
-  brand: { type: String, required: true },
-  volume: String,
-  totalQty: Number,
-  remainingQty: Number,
-  importDate: String,
-  expDate: String,
-  costPrice: Number,
-  suggestedPrice: Number,
-  note: String,
-  barcode: String,
-  imageUrl: String,
-  lotNo: String,
-  unit: { type: String, default: 'ถุง' }
-}, { timestamps: true });
-
-const Product = mongoose.model('Product', productSchema);
-
-// 🚀 API Routes
-app.get('/api/products', async (req, res) => {
-  try {
-    const products = await Product.find().sort({ createdAt: -1 });
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const result = products.map(p => {
-      let diffDays = '-';
-      if (p.expDate) {
-        const exp = new Date(p.expDate);
-        exp.setHours(0, 0, 0, 0);
-        if (!isNaN(exp.getTime())) {
-          diffDays = Math.ceil((exp - today) / (1000 * 60 * 60 * 24));
-        }
-      }
-      return {
-        rowIndex: p._id.toString(),
-        brand: p.brand || '',
-        volume: p.volume || '',
-        totalQty: p.totalQty || 0,
-        remainingQty: p.remainingQty !== undefined ? p.remainingQty : p.totalQty,
-        importDate: p.importDate || '',
-        expDate: p.expDate || '',
-        costPrice: p.costPrice || 0,
-        suggestedPrice: p.suggestedPrice || 0,
-        note: p.note || '',
-        barcode: p.barcode || '',
-        imageUrl: p.imageUrl || '',
-        lotNo: p.lotNo || '',
-        unit: p.unit || 'ถุง',
-        daysLeft: diffDays
-      };
-    });
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+// 📌 เรียกใช้ Gemini SDK แบบปลอดภัย
+let genAI = null;
+try {
+  const { GoogleGenerativeAI } = require('@google/generative-ai');
+  if (process.env.GEMINI_API_KEY) {
+    genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    console.log("✅ Gemini AI Initialized Successfully");
+  } else {
+    console.warn("⚠️ GEMINI_API_KEY is missing in environment variables");
   }
-});
+} catch (e) {
+  console.error("⚠️ Failed to load @google/generative-ai module:", e.message);
+}
 
-app.post('/api/products', async (req, res) => {
-  try {
-    const { action, rowIndex, ...data } = req.body;
-
-    if (action === 'add') {
-      const newProduct = new Product({
-        ...data,
-        remainingQty: data.totalQty
-      });
-      await newProduct.save();
-    } else if (action === 'edit') {
-      await Product.findByIdAndUpdate(rowIndex, data);
-    } else if (action === 'deduct') {
-      const p = await Product.findById(rowIndex);
-      if (p) {
-        p.remainingQty = Math.max(0, p.remainingQty - (req.body.deductQty || 1));
-        await p.save();
-      }
-    } else if (action === 'delete') {
-      await Product.findByIdAndDelete(rowIndex);
-    }
-
-    res.json({ status: 'success' });
-  } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message });
-  }
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));
-
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-// API รับรูปถ่ายซองอาหาร แล้วส่งให้ Gemini AI อ่านข้อมูล
+// 📌 API Endpoint สำหรับสแกนซองอาหาร
 app.post('/api/scan-bag', async (req, res) => {
   try {
-    const { imageBase64 } = req.body;
+    if (!genAI) {
+      return res.status(500).json({ status: 'error', message: 'Gemini AI API Key ยังไม่ได้ตั้งค่าบนเซิร์ฟเวอร์' });
+    }
 
+    const { imageBase64 } = req.body;
     if (!imageBase64) {
       return res.status(400).json({ status: 'error', message: 'กรุณาส่งรูปภาพ' });
     }
@@ -122,16 +40,16 @@ app.post('/api/scan-bag', async (req, res) => {
     });
 
     const prompt = `
-      โปรดวิเคราะห์รูปภาพซองอาหารสัตว์นี้ แล้วดึงข้อมูลออกมาในรูปแบบ JSON ภาษาไทย/อังกฤษ ดังนี้:
-      1. "brand": ชื่อแบรนด์ หรือ ยี่ห้อสินค้าหลักบนซอง (เช่น SmartHeart, Royal Canin, Pedigree, Whiskas, Me-O)
-      2. "volumeValue": ตัวเลขระบุขนาดหรือน้ำหนักบรรจุ เช่น 500, 1.2, 3, 10 (ตอบเฉพาะตัวเลข)
-      3. "volumeUnit": หน่วยของขนาด เลือกระหว่าง "g", "kg", "ml", "L", "ชิ้น" (ถ้าไม่แน่ใจให้ใช้ "kg")
+      โปรดวิเคราะห์รูปภาพบรรจุภัณฑ์สินค้า/ซองอาหาร/กล่องสินค้าในภาพนี้ แล้วดึงข้อมูลออกมาในรูปแบบ JSON ภาษาไทยหรืออังกฤษ ดังนี้:
+      1. "brand": ชื่อยี่ห้อ แบรนด์ หรือชื่อสินค้าหลักที่เห็นชัดที่สุดบนบรรจุภัณฑ์ (เช่น SmartHeart, Royal Canin, Lactasoy, ปกติ, ดักมิลค์)
+      2. "volumeValue": ตัวเลขระบุขนาด น้ำหนัก หรือปริมาตรบรรจุ เช่น 500, 1.2, 3, 250, 500 (ตอบเฉพาะตัวเลขเท่านั้น ถ้าไม่มีให้ใส่ null)
+      3. "volumeUnit": หน่วยของขนาด เลือกระหว่าง "g", "kg", "ml", "L", "ชิ้น" (เช่น นม 250ml ให้ตอบ "ml", อาหาร 1.2kg ให้ตอบ "kg")
 
-      ตัวอย่างโครงสร้างผลลัพธ์:
+      ตัวอย่างโครงสร้างผลลัพธ์ JSON ที่ต้องการ:
       {
-        "brand": "SmartHeart",
-        "volumeValue": 1.2,
-        "volumeUnit": "kg"
+        "brand": "Lactasoy",
+        "volumeValue": 300,
+        "volumeUnit": "ml"
       }
     `;
 
@@ -153,6 +71,6 @@ app.post('/api/scan-bag', async (req, res) => {
 
   } catch (error) {
     console.error('Gemini Scan Error:', error);
-    res.status(500).json({ status: 'error', message: 'ไม่สามารถประมวลผลรูปภาพได้' });
+    res.status(500).json({ status: 'error', message: 'ไม่สามารถประมวลผลรูปภาพได้: ' + error.message });
   }
 });
