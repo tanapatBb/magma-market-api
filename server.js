@@ -130,3 +130,39 @@ app.post('/api/scan-bag', async (req, res) => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+
+// 📌 API เพิ่มสินค้าใหม่ (รองรับชื่อตัวแปรทุกรูปแบบ)
+app.post('/api/products', (req, res) => {
+  try {
+    const { 
+      name, brand, productName,
+      volumeValue, volumeUnit, size,
+      price, stock, quantity, expDate 
+    } = req.body;
+
+    const val = volumeValue || size || "";
+    const unit = volumeUnit || "ถุง";
+    const brandName = brand || "ไม่ระบุ";
+    const prodName = productName || name || `${brandName} ${val}${unit}`;
+
+    const newProduct = {
+      id: "prod-" + Date.now(),
+      name: prodName,
+      brand: brandName,
+      size: `${val} ${unit}`.trim() || "ไม่ระบุ",
+      volumeValue: val ? Number(val) : null,
+      volumeUnit: unit,
+      price: Number(price) || 0,
+      stock: Number(stock || quantity) || 0,
+      quantity: Number(stock || quantity) || 0,
+      expDate: expDate || "ไม่ระบุหมดอายุ"
+    };
+
+    productsList.unshift(newProduct);
+    console.log("✅ เพิ่มสินค้าสำเร็จ:", newProduct);
+
+    res.json({ status: "success", data: newProduct });
+  } catch (err) {
+    res.status(500).json({ status: "error", message: err.message });
+  }
+});
