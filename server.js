@@ -89,10 +89,10 @@ app.post('/api/scan-bag', async (req, res) => {
     const base64Data = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
 
     // เรียกใช้โมเดล gemini-1.5-flash
-    const model = genAI.getGenerativeModel({ 
-      model: "gemini-1.5-flash",
-      generationConfig: { responseMimeType: "application/json" }
-    });
+   const model = genAI.getGenerativeModel({ 
+  model: "gemini-1.5-flash-latest",
+  generationConfig: { responseMimeType: "application/json" }
+});
 
     const prompt = `
       โปรดวิเคราะห์รูปภาพบรรจุภัณฑ์สินค้า/ซองอาหาร/กล่องสินค้าในภาพนี้ แล้วดึงข้อมูลออกมาในรูปแบบ JSON ภาษาไทยหรืออังกฤษ ดังนี้:
