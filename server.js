@@ -1,13 +1,10 @@
 require('dotenv').config();
-
 const express = require('express');
 const cors = require('cors');
 
 const app = express();
-
-// 📌 ตั้งค่า Middleware
 app.use(cors());
-app.use(express.json({ limit: '10mb' })); // รองรับภาพ Base64 ขนาดใหญ่
+app.use(express.json({ limit: '10mb' }));
 
 // 📌 1. ตั้งค่า Gemini AI
 let genAI = null;
@@ -15,69 +12,72 @@ try {
   const { GoogleGenerativeAI } = require('@google/generative-ai');
   if (process.env.GEMINI_API_KEY) {
     genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    console.log("✅ Gemini AI Initialized Successfully");
-  } else {
-    console.warn("⚠️ GEMINI_API_KEY is missing in environment variables");
+    console.log("✅ Gemini AI Initialized");
   }
 } catch (e) {
-  console.error("⚠️ Failed to load @google/generative-ai package:", e.message);
+  console.error("⚠️ Failed to load Gemini AI:", e.message);
 }
 
-// 📌 2. ตัวแปรจำลองฐานข้อมูลสินค้า (In-Memory Database)
+// 📌 2. จำลองฐานข้อมูลสินค้าใน Memory (พร้อม ID ที่ชัดเจน)
 let productsList = [
   {
-    id: 1,
-    name: "Lactasoy นมถั่วเหลือง",
-    brand: "Lactasoy",
-    volumeValue: 300,
-    volumeUnit: "ml",
-    price: 15,
-    stock: 50
+    id: "prod-1",
+    name: "SmartHeart อาหารสุนัขพันธุ์เล็ก 1.2kg",
+    brand: "SmartHeart",
+    volumeValue: 1.2,
+    volumeUnit: "kg",
+    price: 159,
+    stock: 20
   }
 ];
 
-// 📌 3. API ดึงรายการสินค้าทั้งหมด (GET /api/products)
+// 📌 3. API ดึงรายการสินค้าทั้งหมด
 app.get('/api/products', (req, res) => {
-  try {
-    res.json(productsList);
-  } catch (error) {
-    console.error('Error fetching products:', error);
-    res.status(500).json({ status: 'error', message: error.message });
-  }
+  res.json(productsList);
 });
 
-// 📌 4. API บันทึกสินค้าใหม่ (POST /api/products)
+// 📌 4. API เพิ่มสินค้าใหม่
 app.post('/api/products', (req, res) => {
   try {
-    const newProduct = req.body;
+    const { name, brand, volumeValue, volumeUnit, price, stock } = req.body;
     
-    // สร้าง ID ให้อัตโนมัติด้วย timestamp
-    newProduct.id = Date.now();
-    
-    // เพิ่มสินค้าไว้บนสุดของ Array
+    const newProduct = {
+      id: "prod-" + Date.now(), // สร้าง ID ที่ไม่ซ้ำกัน
+      name: name || `${brand || 'สินค้า'} ${volumeValue || ''}${volumeUnit || ''}`,
+      brand: brand || "-",
+      volumeValue: Number(volumeValue) || 0,
+      volumeUnit: volumeUnit || "g",
+      price: Number(price) || 0,
+      stock: Number(stock) || 0
+    };
+
     productsList.unshift(newProduct);
-
-    console.log('✅ บันทึกสินค้าใหม่สำเร็จ:', newProduct);
-
-    res.json({ 
-      status: 'success', 
-      message: 'บันทึกข้อมูลเรียบร้อย',
-      data: newProduct 
-    });
-  } catch (error) {
-    console.error('Error saving product:', error);
-    res.status(500).json({ status: 'error', message: error.message });
+    console.log("✅ เพิ่มสินค้าสำเร็จ:", newProduct);
+    res.json({ status: "success", data: newProduct });
+  } catch (err) {
+    res.status(500).json({ status: "error", message: err.message });
   }
 });
 
-// 📌 5. API สแกนซองอาหารด้วย Gemini AI (POST /api/scan-bag)
+// 📌 5. API ลบสินค้าตาม ID (แก้ปัญหาลบมั่ว)
+app.delete('/api/products/:id', (req, res) => {
+  const { id } = req.params;
+  const initialCount = productsList.length;
+  productsList = productsList.filter(item => String(item.id) !== String(id));
+
+  if (productsList.length < initialCount) {
+    console.log(`🗑️ ลบสินค้า ID: ${id} เรียบร้อย`);
+    res.json({ status: "success", message: "ลบรายการสำเร็จ" });
+  } else {
+    res.status(404).json({ status: "error", message: "ไม่พบสินค้าที่ต้องการลบ" });
+  }
+});
+
+// 📌 6. API สแกนซองอาหารด้วย AI (ฉลาดขึ้น + อ่านได้แม่นยำขึ้น)
 app.post('/api/scan-bag', async (req, res) => {
   try {
     if (!genAI) {
-      return res.status(500).json({ 
-        status: 'error', 
-        message: 'ยังไม่ได้ตั้งค่า GEMINI_API_KEY บนเซิร์ฟเวอร์ Render' 
-      });
+      return res.status(500).json({ status: 'error', message: 'กรุณาตั้งค่า GEMINI_API_KEY บนเซิร์ฟเวอร์' });
     }
 
     const { imageBase64 } = req.body;
@@ -85,56 +85,48 @@ app.post('/api/scan-bag', async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'กรุณาส่งรูปภาพ' });
     }
 
-    // ตัด Prefix data:image/...;base64, ออกอย่างปลอดภัย
     const base64Data = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
 
-    // เรียกใช้โมเดล gemini-1.5-flash
-   const model = genAI.getGenerativeModel({ 
-  model: "gemini-1.5-flash-latest",
-  generationConfig: { responseMimeType: "application/json" }
-});
+    // ใช้ gemini-1.5-flash-latest หรือ gemini-2.5-flash เพื่อความเสถียร
+    const model = genAI.getGenerativeModel({ 
+      model: "gemini-1.5-flash-latest",
+      generationConfig: { 
+        responseMimeType: "application/json",
+        temperature: 0.1 // ตั้งค่าให้ AI ตอบแบบแม่นยำ ไม่สุ่มคำ
+      }
+    });
 
     const prompt = `
-      โปรดวิเคราะห์รูปภาพบรรจุภัณฑ์สินค้า/ซองอาหาร/กล่องสินค้าในภาพนี้ แล้วดึงข้อมูลออกมาในรูปแบบ JSON ภาษาไทยหรืออังกฤษ ดังนี้:
-      1. "brand": ชื่อยี่ห้อ แบรนด์ หรือชื่อสินค้าหลักที่เห็นชัดที่สุดบนบรรจุภัณฑ์ (เช่น SmartHeart, Royal Canin, Lactasoy)
-      2. "volumeValue": ตัวเลขระบุขนาด น้ำหนัก หรือปริมาตรบรรจุ เช่น 500, 1.2, 3, 250 (ตอบเฉพาะตัวเลขเท่านั้น ถ้าไม่มีให้ใส่ null)
-      3. "volumeUnit": หน่วยของขนาด เลือกระหว่าง "g", "kg", "ml", "L", "ชิ้น" (เช่น นม 250ml ให้ตอบ "ml", อาหาร 1.2kg ให้ตอบ "kg")
+      คุณคือผู้เชี่ยวชาญด้านการวิเคราะห์บรรจุภัณฑ์อาหารสัตว์และสินค้าอุปโภคบริโภค
+      โปรดวิเคราะห์ภาพซองอาหาร/สินค้าสัตว์เลี้ยงนี้ แล้วตอบกลับมาเป็น JSON ตามโครงสร้างนี้เท่านั้น:
 
-      ตัวอย่างโครงสร้างผลลัพธ์ JSON:
       {
-        "brand": "Lactasoy",
-        "volumeValue": 300,
-        "volumeUnit": "ml"
+        "brand": "ยี่ห้อหรือแบรนด์หลักของสินค้า เช่น SmartHeart, Royal Canin, Pedigree, Whiskas, Me-O, Felipro",
+        "productName": "ชื่อสินค้าหรือสูตร เช่น สูตรสุนัขโต รสตับ, อาหารแมวโต รสปลาทู",
+        "volumeValue": ตัวเลขน้ำหนักหรือขนาดบรรจุภัณฑ์ (เฉพาะตัวเลขเท่านั้น เช่น 1.2, 500, 3, 400),
+        "volumeUnit": "หน่วยของขนาด ตอบเฉพาะอย่างใดอย่างหนึ่งคือ 'g', 'kg', 'ml', 'L', หรือ 'ชิ้น'"
       }
+
+      คำแนะนำเพิ่มเติม:
+      - พยายามหาตัวเลขน้ำหนักสุทธิ (Net Weight) บนซอง
+      - หากไม่พบยี่ห้อให้ใส่ "ไม่ระบุ"
+      - หากไม่พบขนาดตัวเลข ให้ใส่ null
     `;
 
     const imagePart = {
-      inlineData: {
-        data: base64Data,
-        mimeType: 'image/jpeg'
-      }
+      inlineData: { data: base64Data, mimeType: 'image/jpeg' }
     };
 
     const result = await model.generateContent([prompt, imagePart]);
-    const responseText = result.response.text();
-    const extractedData = JSON.parse(responseText);
+    const extractedData = JSON.parse(result.response.text());
 
-    res.json({
-      status: 'success',
-      data: extractedData
-    });
+    res.json({ status: 'success', data: extractedData });
 
   } catch (error) {
     console.error('Gemini Scan Error:', error);
-    res.status(500).json({ 
-      status: 'error', 
-      message: 'เกิดข้อผิดพลาดในการอ่านรูปภาพ: ' + error.message 
-    });
+    res.status(500).json({ status: 'error', message: 'AI ไม่สามารถอ่านรูปภาพได้: ' + error.message });
   }
 });
 
-// 📌 6. เปิดเซิร์ฟเวอร์รันตลอดเวลา
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-  console.log(`🚀 Server is running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
