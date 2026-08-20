@@ -1,168 +1,104 @@
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
+const API_URL = 'https://magma-market-api.onrender.com/api';
 
-const app = express();
-app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+document.addEventListener('DOMContentLoaded', fetchProducts);
 
-// 📌 1. ตั้งค่า Gemini AI
-let genAI = null;
-try {
-  const { GoogleGenerativeAI } = require('@google/generative-ai');
-  if (process.env.GEMINI_API_KEY) {
-    genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    console.log("✅ Gemini AI Initialized");
+// 1. ดึงรายการสินค้า
+async function fetchProducts() {
+  try {
+    const res = await fetch(`${API_URL}/products`);
+    const products = await res.json();
+    renderProducts(products);
+  } catch (err) {
+    console.error('Error fetching products:', err);
+    document.getElementById('productList').innerHTML = '<div class="empty-state">ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้</div>';
   }
-} catch (e) {
-  console.error("⚠️ Failed to load Gemini AI:", e.message);
 }
 
-// 📌 2. จำลองฐานข้อมูลสินค้าใน Memory (พร้อม ID ที่ชัดเจน)
-let productsList = [
-  {
-    id: "prod-1",
-    name: "SmartHeart อาหารสุนัขพันธุ์เล็ก 1.2kg",
-    brand: "SmartHeart",
-    volumeValue: 1.2,
-    volumeUnit: "kg",
-    price: 159,
-    stock: 20
+// 2. แสดงผลการ์ดสินค้า
+function renderProducts(products) {
+  const container = document.getElementById('productList');
+  if (!container) return;
+
+  if (!products || products.length === 0) {
+    container.innerHTML = '<div class="empty-state">ยังไม่มีรายการสินค้าในระบบ</div>';
+    return;
   }
-];
 
-// 📌 3. API ดึงรายการสินค้าทั้งหมด
-app.get('/api/products', (req, res) => {
-  res.json(productsList);
-});
+  container.innerHTML = products.map(item => `
+    <div class="product-card" id="product-card-${item.id}">
+      <div class="product-info">
+        <h3>${item.brand && item.brand !== '-' ? item.brand : 'ไม่ระบุยี่ห้อ'}</h3>
+        <p><strong>ชื่อ:</strong> ${item.name || 'ไม่ระบุ'}</p>
+        <p><strong>ขนาด:</strong> ${item.size || (item.volumeValue ? item.volumeValue + ' ' + item.volumeUnit : 'ไม่ได้ระบุ')}</p>
+        <p><strong>คงเหลือ:</strong> ${item.stock ?? 0} ถุง</p>
+        <p><strong>วันหมดอายุ:</strong> ${item.expDate || 'ไม่ระบุ'}</p>
+      </div>
+      <div style="margin-top: 15px; text-align: right;">
+        <button class="btn-delete" onclick="deleteProduct('${item.id}')">🗑️ ลบรายการ</button>
+      </div>
+    </div>
+  `).join('');
+}
 
-// 📌 4. API เพิ่มสินค้าใหม่
-app.post('/api/products', (req, res) => {
+// 3. บันทึกสินค้าใหม่
+async function saveProduct(event) {
+  event.preventDefault();
+
+  const productData = {
+    brand: document.getElementById('brand').value,
+    name: document.getElementById('name').value,
+    volumeValue: document.getElementById('volumeValue').value,
+    volumeUnit: document.getElementById('volumeUnit').value,
+    stock: document.getElementById('stock').value,
+    expDate: document.getElementById('expDate').value
+  };
+
   try {
-    const { name, brand, volumeValue, volumeUnit, price, stock } = req.body;
-    
-    const newProduct = {
-      id: "prod-" + Date.now(), // สร้าง ID ที่ไม่ซ้ำกัน
-      name: name || `${brand || 'สินค้า'} ${volumeValue || ''}${volumeUnit || ''}`,
-      brand: brand || "-",
-      volumeValue: Number(volumeValue) || 0,
-      volumeUnit: volumeUnit || "g",
-      price: Number(price) || 0,
-      stock: Number(stock) || 0
-    };
-
-    productsList.unshift(newProduct);
-    console.log("✅ เพิ่มสินค้าสำเร็จ:", newProduct);
-    res.json({ status: "success", data: newProduct });
-  } catch (err) {
-    res.status(500).json({ status: "error", message: err.message });
-  }
-});
-
-// 📌 5. API ลบสินค้าตาม ID (แก้ปัญหาลบมั่ว)
-app.delete('/api/products/:id', (req, res) => {
-  const { id } = req.params;
-  const initialCount = productsList.length;
-  productsList = productsList.filter(item => String(item.id) !== String(id));
-
-  if (productsList.length < initialCount) {
-    console.log(`🗑️ ลบสินค้า ID: ${id} เรียบร้อย`);
-    res.json({ status: "success", message: "ลบรายการสำเร็จ" });
-  } else {
-    res.status(404).json({ status: "error", message: "ไม่พบสินค้าที่ต้องการลบ" });
-  }
-});
-
-// 📌 6. API สแกนซองอาหารด้วย AI (ฉลาดขึ้น + อ่านได้แม่นยำขึ้น)
-app.post('/api/scan-bag', async (req, res) => {
-  try {
-    if (!genAI) {
-      return res.status(500).json({ status: 'error', message: 'กรุณาตั้งค่า GEMINI_API_KEY บนเซิร์ฟเวอร์' });
-    }
-
-    const { imageBase64 } = req.body;
-    if (!imageBase64) {
-      return res.status(400).json({ status: 'error', message: 'กรุณาส่งรูปภาพ' });
-    }
-
-    const base64Data = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
-
-    // ใช้ gemini-1.5-flash-latest หรือ gemini-2.5-flash เพื่อความเสถียร
-    const model = genAI.getGenerativeModel({ 
-      model: "gemini-1.5-flash-latest",
-      generationConfig: { 
-        responseMimeType: "application/json",
-        temperature: 0.1 // ตั้งค่าให้ AI ตอบแบบแม่นยำ ไม่สุ่มคำ
-      }
+    const res = await fetch(`${API_URL}/products`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(productData)
     });
 
-    const prompt = `
-      คุณคือผู้เชี่ยวชาญด้านการวิเคราะห์บรรจุภัณฑ์อาหารสัตว์และสินค้าอุปโภคบริโภค
-      โปรดวิเคราะห์ภาพซองอาหาร/สินค้าสัตว์เลี้ยงนี้ แล้วตอบกลับมาเป็น JSON ตามโครงสร้างนี้เท่านั้น:
+    const result = await res.json();
 
-      {
-        "brand": "ยี่ห้อหรือแบรนด์หลักของสินค้า เช่น SmartHeart, Royal Canin, Pedigree, Whiskas, Me-O, Felipro",
-        "productName": "ชื่อสินค้าหรือสูตร เช่น สูตรสุนัขโต รสตับ, อาหารแมวโต รสปลาทู",
-        "volumeValue": ตัวเลขน้ำหนักหรือขนาดบรรจุภัณฑ์ (เฉพาะตัวเลขเท่านั้น เช่น 1.2, 500, 3, 400),
-        "volumeUnit": "หน่วยของขนาด ตอบเฉพาะอย่างใดอย่างหนึ่งคือ 'g', 'kg', 'ml', 'L', หรือ 'ชิ้น'"
-      }
-
-      คำแนะนำเพิ่มเติม:
-      - พยายามหาตัวเลขน้ำหนักสุทธิ (Net Weight) บนซอง
-      - หากไม่พบยี่ห้อให้ใส่ "ไม่ระบุ"
-      - หากไม่พบขนาดตัวเลข ให้ใส่ null
-    `;
-
-    const imagePart = {
-      inlineData: { data: base64Data, mimeType: 'image/jpeg' }
-    };
-
-    const result = await model.generateContent([prompt, imagePart]);
-    const extractedData = JSON.parse(result.response.text());
-
-    res.json({ status: 'success', data: extractedData });
-
-  } catch (error) {
-    console.error('Gemini Scan Error:', error);
-    res.status(500).json({ status: 'error', message: 'AI ไม่สามารถอ่านรูปภาพได้: ' + error.message });
-  }
-});
-
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
-
-// 📌 API เพิ่มสินค้าใหม่ (รองรับชื่อตัวแปรทุกรูปแบบ)
-app.post('/api/products', (req, res) => {
-  try {
-    const { 
-      name, brand, productName,
-      volumeValue, volumeUnit, size,
-      price, stock, quantity, expDate 
-    } = req.body;
-
-    const val = volumeValue || size || "";
-    const unit = volumeUnit || "ถุง";
-    const brandName = brand || "ไม่ระบุ";
-    const prodName = productName || name || `${brandName} ${val}${unit}`;
-
-    const newProduct = {
-      id: "prod-" + Date.now(),
-      name: prodName,
-      brand: brandName,
-      size: `${val} ${unit}`.trim() || "ไม่ระบุ",
-      volumeValue: val ? Number(val) : null,
-      volumeUnit: unit,
-      price: Number(price) || 0,
-      stock: Number(stock || quantity) || 0,
-      quantity: Number(stock || quantity) || 0,
-      expDate: expDate || "ไม่ระบุหมดอายุ"
-    };
-
-    productsList.unshift(newProduct);
-    console.log("✅ เพิ่มสินค้าสำเร็จ:", newProduct);
-
-    res.json({ status: "success", data: newProduct });
+    if (result.status === 'success') {
+      alert('บันทึกสินค้าเรียบร้อย!');
+      document.getElementById('productForm').reset();
+      fetchProducts();
+    } else {
+      alert('เกิดข้อผิดพลาด: ' + result.message);
+    }
   } catch (err) {
-    res.status(500).json({ status: "error", message: err.message });
+    console.error('Save Error:', err);
+    alert('ไม่สามารถบันทึกข้อมูลได้');
   }
-});
+}
+
+// 4. ลบสินค้าตาม ID (ไม่กระพริบ)
+async function deleteProduct(id) {
+  if (!confirm('ยืนยันการลบรายการนี้ใช่หรือไม่?')) return;
+
+  try {
+    const res = await fetch(`${API_URL}/products/${id}`, {
+      method: 'DELETE'
+    });
+
+    const result = await res.json();
+
+    if (result.status === 'success') {
+      const card = document.getElementById(`product-card-${id}`);
+      if (card) card.remove();
+
+      const container = document.getElementById('productList');
+      if (container && container.children.length === 0) {
+        container.innerHTML = '<div class="empty-state">ยังไม่มีรายการสินค้าในระบบ</div>';
+      }
+    } else {
+      alert('ลบไม่สำเร็จ: ' + result.message);
+    }
+  } catch (err) {
+    console.error('Delete Error:', err);
+    alert('เกิดข้อผิดพลาดในการลบรายการ');
+  }
+}
