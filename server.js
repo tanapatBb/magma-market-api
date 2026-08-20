@@ -2,6 +2,18 @@ const API_URL = 'https://magma-market-api.onrender.com/api';
 
 document.addEventListener('DOMContentLoaded', fetchProducts);
 
+// ฟังก์ชันรองรับการเลือกรูปภาพจากมือถือ (ถ่ายรูป หรือ เลือกจากคลังภาพ)
+function handleImageSelect(event) {
+  const file = event.target.files[0];
+  const statusDiv = document.getElementById('uploadStatus');
+
+  if (file) {
+    statusDiv.innerHTML = `📷 เลือกไฟล์เรียบร้อย: ${file.name}`;
+  } else {
+    statusDiv.innerHTML = '';
+  }
+}
+
 // 1. ดึงรายการสินค้า
 async function fetchProducts() {
   try {
@@ -65,6 +77,7 @@ async function saveProduct(event) {
     if (result.status === 'success') {
       alert('บันทึกสินค้าเรียบร้อย!');
       document.getElementById('productForm').reset();
+      document.getElementById('uploadStatus').innerHTML = '';
       fetchProducts();
     } else {
       alert('เกิดข้อผิดพลาด: ' + result.message);
@@ -75,7 +88,7 @@ async function saveProduct(event) {
   }
 }
 
-// 4. ลบสินค้าตาม ID (ไม่กระพริบ)
+// 4. ลบสินค้าตาม ID
 async function deleteProduct(id) {
   if (!confirm('ยืนยันการลบรายการนี้ใช่หรือไม่?')) return;
 
